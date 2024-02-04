@@ -1,4 +1,13 @@
-use std::net::TcpListener;
+use std::{
+    io::Write,
+    net::{TcpListener, TcpStream},
+};
+
+fn handle_stream(mut stream: TcpStream) {
+    stream
+        .write_all("+PONG\r\n".as_bytes())
+        .expect("write failed");
+}
 
 fn main() {
     println!("Logs from redis will appear here!");
@@ -7,9 +16,7 @@ fn main() {
 
     for stream in listener.incoming() {
         match stream {
-            Ok(_stream) => {
-                println!("accepted new connection");
-            }
+            Ok(_stream) => handle_stream(_stream),
             Err(e) => {
                 println!("error: {}", e);
             }
