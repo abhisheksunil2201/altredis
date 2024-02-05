@@ -4,9 +4,15 @@ use std::{
 };
 
 fn handle_stream(mut stream: TcpStream) {
-    let mut buf = [0; 1024];
+    let mut buf = [0u8; 1024];
     while let Ok(_) = stream.read(&mut buf) {
-        stream.write_all("+PONG\r\n".as_bytes()).unwrap();
+        match stream.write_all("+PONG\r\n".as_bytes()) {
+            Ok(_) => {}
+            Err(e) => {
+                println!("Error writing to stream: {}", e);
+                return;
+            }
+        };
     }
 }
 
