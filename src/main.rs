@@ -1,12 +1,13 @@
 use std::{
-    io::Write,
+    io::{Read, Write},
     net::{TcpListener, TcpStream},
 };
 
 fn handle_stream(mut stream: TcpStream) {
-    stream
-        .write_all("+PONG\r\n".as_bytes())
-        .expect("write failed");
+    let mut buf = [0; 1024];
+    while let Ok(_) = stream.read(&mut buf) {
+        stream.write_all("+PONG\r\n".as_bytes()).unwrap();
+    }
 }
 
 fn main() {
