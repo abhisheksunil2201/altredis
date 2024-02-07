@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -6,12 +8,30 @@ use tokio::{
 enum Command {
     Ping,
     Echo(String),
+    Get(String),
+    Set(String, String),
 }
 
 #[derive(Debug)]
 enum Data {
     Array(Vec<Data>),
     BulkStringValue(String),
+}
+
+struct Database {
+    db: HashMap<String, String>,
+}
+
+impl Database {
+    fn new() -> Self {
+        Database { db: HashMap::new() }
+    }
+    fn set(&mut self, key: String, value: String) {
+        self.db.insert(key, value);
+    }
+    fn get(&self, key: &str) -> Option<&String> {
+        self.db.get(key)
+    }
 }
 
 static CRLF: &str = "\r\n";
@@ -72,6 +92,27 @@ fn parse_command(data: &str) -> Result<Command, &str> {
                     args.push_str(CRLF);
                     Ok(Command::Echo(args.clone()))
                 }
+                "GET" => {
+                    let key = cmd_vec.get(1);
+                    let mut key_str = String::new();
+                    if let Some(Data::BulkStringValue(key)) = key {
+                        key_str.push_str(key);
+                    }
+                    Ok(Command::Get(key_str.clone()))
+                }
+                "SET" => {
+                    let key = cmd_vec.get(1);
+                    let value = cmd_vec.get(2);
+                    let mut key_str = String::new();
+                    let mut value_str = String::new();
+                    if let Some(Data::BulkStringValue(key)) = key {
+                        key_str.push_str(key);
+                    }
+                    if let Some(Data::BulkStringValue(value)) = value {
+                        value_str.push_str(value);
+                    }
+                    Ok(Command::Set(key_str, value_str))
+                }
                 _ => Err("Command not supported."),
             }
         } else {
@@ -84,7 +125,7 @@ fn parse_command(data: &str) -> Result<Command, &str> {
 
 async fn handle_connection(mut stream: TcpStream) {
     let mut buf = [0u8; 1024];
-
+    let mut db = Database::new();
     while let Ok(n) = stream.read(&mut buf).await {
         match parse_command(&String::from_utf8((buf[..n]).to_vec()).unwrap()) {
             Ok(cmd) => match cmd {
@@ -93,6 +134,27 @@ async fn handle_connection(mut stream: TcpStream) {
                 }
                 Command::Echo(s) => {
                     let _ = stream.write_all(s.as_bytes()).await;
+                }
+                Command::Get(key) => {
+                    let value = db.get(&key);
+                    match value {
+                        Some(value) => {
+                            let mut response = String::new();
+                            response.push_str("$");
+                            response.push_str(&value.len().to_string());
+                            response.push_str(CRLF);
+                            response.push_str(&value);
+                            response.push_str(CRLF);
+                            let _ = stream.write_all(response.as_bytes()).await;
+                        }
+                        None => {
+                            let _ = stream.write_all(b"$-1\r\n").await;
+                        }
+                    }
+                }
+                Command::Set(key, value) => {
+                    db.set(key, value);
+                    let _ = stream.write_all(b"+OK\r\n").await;
                 }
             },
             Err(e) => {
