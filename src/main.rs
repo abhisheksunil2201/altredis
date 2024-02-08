@@ -1,4 +1,7 @@
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    time::{Duration, SystemTime},
+};
 
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -9,7 +12,7 @@ enum Command {
     Ping,
     Echo(String),
     Get(String),
-    Set(String, String),
+    Set(String, Value),
 }
 
 #[derive(Debug)]
@@ -18,19 +21,40 @@ enum Data {
     BulkStringValue(String),
 }
 
+struct Value {
+    value: String,
+    expiry: Option<SystemTime>,
+}
+
 struct Database {
-    db: HashMap<String, String>,
+    db: HashMap<String, Value>,
 }
 
 impl Database {
     fn new() -> Self {
         Database { db: HashMap::new() }
     }
-    fn set(&mut self, key: String, value: String) {
-        self.db.insert(key, value);
+    fn set(&mut self, key: String, value: Value) {
+        self.db.insert(
+            key,
+            Value {
+                value: value.value,
+                expiry: value.expiry,
+            },
+        );
     }
-    fn get(&self, key: &str) -> Option<&String> {
-        self.db.get(key)
+    fn delete_key_if_expired(&mut self, key: &str) {
+        let val = self.db.get(key);
+        if let Some(t) = val.and_then(|v| v.expiry) {
+            if t <= SystemTime::now() {
+                self.db.remove(key);
+            }
+        }
+    }
+    fn get(&mut self, key: &str) -> Option<&String> {
+        self.delete_key_if_expired(key);
+        let val = self.db.get(key)?;
+        Some(&val.value)
     }
 }
 
@@ -111,7 +135,38 @@ fn parse_command(data: &str) -> Result<Command, &str> {
                     if let Some(Data::BulkStringValue(value)) = value {
                         value_str.push_str(value);
                     }
-                    Ok(Command::Set(key_str, value_str))
+                    if let Some(Data::BulkStringValue(arg)) = cmd_vec.get(3) {
+                        match arg.as_str() {
+                            "px" | "ex" => {
+                                if let Some(Data::BulkStringValue(expiry)) = cmd_vec.get(4) {
+                                    match expiry.parse::<u64>() {
+                                        Ok(duration) => Ok(Command::Set(
+                                            key_str.clone(),
+                                            Value {
+                                                value: value_str.clone(),
+                                                expiry: Some(
+                                                    SystemTime::now()
+                                                        + Duration::from_millis(duration),
+                                                ),
+                                            },
+                                        )),
+                                        Err(_) => return Err("Invalid expiry duration"),
+                                    }
+                                } else {
+                                    Err("Invalid expiry duration")
+                                }
+                            }
+                            _ => Err("Invalid command."),
+                        }
+                    } else {
+                        Ok(Command::Set(
+                            key_str.clone(),
+                            Value {
+                                value: value_str.clone(),
+                                expiry: None,
+                            },
+                        ))
+                    }
                 }
                 _ => Err("Command not supported."),
             }
@@ -140,10 +195,8 @@ async fn handle_connection(mut stream: TcpStream) {
                     match value {
                         Some(value) => {
                             let mut response = String::new();
-                            response.push_str("$");
-                            response.push_str(&value.len().to_string());
-                            response.push_str(CRLF);
-                            response.push_str(&value);
+                            response.push_str(format!("${}{}", value.len(), CRLF).as_str());
+                            response.push_str(value.as_str());
                             response.push_str(CRLF);
                             let _ = stream.write_all(response.as_bytes()).await;
                         }
@@ -153,7 +206,13 @@ async fn handle_connection(mut stream: TcpStream) {
                     }
                 }
                 Command::Set(key, value) => {
-                    db.set(key, value);
+                    db.set(
+                        key,
+                        Value {
+                            value: value.value,
+                            expiry: value.expiry,
+                        },
+                    );
                     let _ = stream.write_all(b"+OK\r\n").await;
                 }
             },
