@@ -1,7 +1,6 @@
-use std::{
-    collections::HashMap,
-    time::{Duration, SystemTime},
-};
+mod db;
+
+use std::time::{Duration, SystemTime};
 
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -12,50 +11,13 @@ enum Command {
     Ping,
     Echo(String),
     Get(String),
-    Set(String, Value),
+    Set(String, db::Value),
 }
 
 #[derive(Debug)]
 enum Data {
     Array(Vec<Data>),
     BulkStringValue(String),
-}
-
-struct Value {
-    value: String,
-    expiry: Option<SystemTime>,
-}
-
-struct Database {
-    db: HashMap<String, Value>,
-}
-
-impl Database {
-    fn new() -> Self {
-        Database { db: HashMap::new() }
-    }
-    fn set(&mut self, key: String, value: Value) {
-        self.db.insert(
-            key,
-            Value {
-                value: value.value,
-                expiry: value.expiry,
-            },
-        );
-    }
-    fn delete_key_if_expired(&mut self, key: &str) {
-        let val = self.db.get(key);
-        if let Some(t) = val.and_then(|v| v.expiry) {
-            if t <= SystemTime::now() {
-                self.db.remove(key);
-            }
-        }
-    }
-    fn get(&mut self, key: &str) -> Option<&String> {
-        self.delete_key_if_expired(key);
-        let val = self.db.get(key)?;
-        Some(&val.value)
-    }
 }
 
 static CRLF: &str = "\r\n";
@@ -142,7 +104,7 @@ fn parse_command(data: &str) -> Result<Command, &str> {
                                     match expiry.parse::<u64>() {
                                         Ok(duration) => Ok(Command::Set(
                                             key_str.clone(),
-                                            Value {
+                                            db::Value {
                                                 value: value_str.clone(),
                                                 expiry: Some(
                                                     SystemTime::now()
@@ -161,7 +123,7 @@ fn parse_command(data: &str) -> Result<Command, &str> {
                     } else {
                         Ok(Command::Set(
                             key_str.clone(),
-                            Value {
+                            db::Value {
                                 value: value_str.clone(),
                                 expiry: None,
                             },
@@ -180,7 +142,7 @@ fn parse_command(data: &str) -> Result<Command, &str> {
 
 async fn handle_connection(mut stream: TcpStream) {
     let mut buf = [0u8; 1024];
-    let mut db = Database::new();
+    let mut db = db::Database::new();
     while let Ok(n) = stream.read(&mut buf).await {
         match parse_command(&String::from_utf8((buf[..n]).to_vec()).unwrap()) {
             Ok(cmd) => match cmd {
@@ -208,7 +170,7 @@ async fn handle_connection(mut stream: TcpStream) {
                 Command::Set(key, value) => {
                     db.set(
                         key,
-                        Value {
+                        db::Value {
                             value: value.value,
                             expiry: value.expiry,
                         },
