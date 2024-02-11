@@ -1,12 +1,14 @@
 use std::time::{Duration, SystemTime};
 static CRLF: &str = "\r\n";
-use crate::{db, Command};
+use crate::{store, Command};
 pub enum Data {
     Array(Vec<Data>),
     BulkStringValue(String),
 }
 
 fn parse_array(data: &str) -> Result<(Data, &str), &str> {
+    //check if array empty
+    println!("parse_array: {}", data);
     if let Some((num_elements, mut rest)) = data.split_once(CRLF) {
         let num_elements = num_elements[1..]
             .parse::<usize>()
@@ -38,6 +40,7 @@ fn parse_string(data: &str) -> Result<(Data, &str), &str> {
     }
 }
 fn parse_val(data: &str) -> Result<(Data, &str), &str> {
+    println!("parse_val: {}", data);
     match data.chars().next() {
         Some('*') => parse_array(data),
         Some('$') => parse_string(data),
@@ -87,7 +90,7 @@ pub fn parse_command(data: &str) -> Result<Command, &str> {
                                     match expiry.parse::<u64>() {
                                         Ok(duration) => Ok(Command::Set(
                                             key_str.clone(),
-                                            db::Value {
+                                            store::Value {
                                                 value: value_str.clone(),
                                                 expiry: Some(
                                                     SystemTime::now()
@@ -106,7 +109,7 @@ pub fn parse_command(data: &str) -> Result<Command, &str> {
                     } else {
                         Ok(Command::Set(
                             key_str.clone(),
-                            db::Value {
+                            store::Value {
                                 value: value_str.clone(),
                                 expiry: None,
                             },
@@ -129,6 +132,14 @@ pub fn parse_command(data: &str) -> Result<Command, &str> {
                     } else {
                         Err("Invalid Command")
                     }
+                }
+                "KEYS" => {
+                    let pattern = cmd_vec.get(1);
+                    let mut pattern_str = String::new();
+                    if let Some(Data::BulkStringValue(pattern)) = pattern {
+                        pattern_str.push_str(pattern);
+                    }
+                    Ok(Command::Keys(pattern_str.clone()))
                 }
                 _ => Err("Command not supported."),
             }
