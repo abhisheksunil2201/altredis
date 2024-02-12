@@ -1,5 +1,6 @@
 use std::time::{Duration, SystemTime};
 static CRLF: &str = "\r\n";
+use crate::rdb::DataType;
 use crate::{store, Command};
 pub enum Data {
     Array(Vec<Data>),
@@ -7,8 +8,6 @@ pub enum Data {
 }
 
 fn parse_array(data: &str) -> Result<(Data, &str), &str> {
-    //check if array empty
-    println!("parse_array: {}", data);
     if let Some((num_elements, mut rest)) = data.split_once(CRLF) {
         let num_elements = num_elements[1..]
             .parse::<usize>()
@@ -40,7 +39,6 @@ fn parse_string(data: &str) -> Result<(Data, &str), &str> {
     }
 }
 fn parse_val(data: &str) -> Result<(Data, &str), &str> {
-    println!("parse_val: {}", data);
     match data.chars().next() {
         Some('*') => parse_array(data),
         Some('$') => parse_string(data),
@@ -91,7 +89,7 @@ pub fn parse_command(data: &str) -> Result<Command, &str> {
                                         Ok(duration) => Ok(Command::Set(
                                             key_str.clone(),
                                             store::Value {
-                                                value: value_str.clone(),
+                                                value: DataType::String(value_str.clone()),
                                                 expiry: Some(
                                                     SystemTime::now()
                                                         + Duration::from_millis(duration),
@@ -110,7 +108,7 @@ pub fn parse_command(data: &str) -> Result<Command, &str> {
                         Ok(Command::Set(
                             key_str.clone(),
                             store::Value {
-                                value: value_str.clone(),
+                                value: DataType::String(value_str.clone()),
                                 expiry: None,
                             },
                         ))

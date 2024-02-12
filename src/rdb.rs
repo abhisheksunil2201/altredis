@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::io::SeekFrom;
-use std::path::PathBuf;
+use std::path::Path;
 use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
@@ -29,6 +29,7 @@ pub struct RdbData {
     pub rdb_version: u16,
     pub metadata: HashMap<String, String>,
     pub databases: HashMap<usize, HashMap<String, DataType>>,
+    pub expirations: HashMap<usize, HashMap<String, SystemTime>>,
 }
 
 #[derive(Error, Debug)]
@@ -60,7 +61,7 @@ pub enum RdbReadError {
 pub struct RdbReader;
 
 impl RdbReader {
-    pub async fn read(&self, path: &PathBuf) -> Result<RdbData, RdbReadError> {
+    pub async fn read(path: impl AsRef<Path>) -> Result<RdbData, RdbReadError> {
         let mut reader = {
             let file = File::open(path).await?;
             BufReader::new(file)
@@ -143,6 +144,7 @@ impl RdbReader {
             rdb_version,
             metadata,
             databases,
+            expirations,
         })
     }
 
