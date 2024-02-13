@@ -102,7 +102,7 @@ pub fn parse_command(data: &str) -> Result<Command, &str> {
                                     Err("Invalid expiry duration")
                                 }
                             }
-                            _ => Err("Invalid command."),
+                            _ => Err("Invalid argument."),
                         }
                     } else {
                         Ok(Command::Set(
@@ -138,6 +138,14 @@ pub fn parse_command(data: &str) -> Result<Command, &str> {
                         pattern_str.push_str(pattern);
                     }
                     Ok(Command::Keys(pattern_str.clone()))
+                }
+                "INFO" => {
+                    let arg = cmd_vec.get(1);
+                    let mut arg_str = String::new();
+                    if let Some(Data::BulkStringValue(arg)) = arg {
+                        arg_str.push_str(arg);
+                    }
+                    Ok(Command::Info(arg_str.clone()))
                 }
                 _ => Err("Command not supported."),
             }

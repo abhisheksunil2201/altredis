@@ -1,7 +1,6 @@
 use crate::rdb::{DataType, RdbReader};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
-use std::env::args;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -25,6 +24,8 @@ pub struct Config {
     pub dir: Option<String>,
     pub dbfilename: Option<String>,
     pub port: u16,
+    pub masterhost: Option<String>,
+    pub masterport: Option<u16>,
 }
 
 impl Config {
@@ -33,30 +34,8 @@ impl Config {
             dir: None,
             dbfilename: None,
             port: 6379,
-        }
-    }
-
-    pub async fn set_from_args(&mut self) {
-        let args: Vec<String> = args().collect();
-        let mut iter = args.iter();
-        while let Some(arg) = iter.next() {
-            match arg.to_lowercase().as_str() {
-                "--dir" => {
-                    self.dir = iter.next().map(|s| s.to_owned());
-                }
-                "--dbfilename" => {
-                    self.dbfilename = iter.next().map(|s| s.to_owned());
-                }
-                _ => {}
-            }
-        }
-    }
-
-    pub fn get(&self, key: &str) -> Option<String> {
-        match key {
-            "dir" => self.dir.clone(),
-            "dbfilename" => self.dbfilename.clone(),
-            _ => None,
+            masterhost: None,
+            masterport: None,
         }
     }
 }
@@ -98,7 +77,6 @@ pub async fn db_get(db_id: usize, key: &String) -> Result<Option<DataType>, anyh
         let cache = CACHE.read().await;
         if let Some(database) = cache.get(&db_id) {
             let mut is_valid = true;
-
             if let Some(entry) = database.get(key) {
                 if let Some(expiration) = entry.expiry.as_ref() {
                     if *expiration < SystemTime::now() {
@@ -139,4 +117,13 @@ pub async fn db_set(db_id: usize, key: String, value: Value) -> Result<(), anyho
     }
 
     Ok(())
+}
+
+pub async fn db_list_keys(db_id: usize) -> Result<Vec<String>, anyhow::Error> {
+    let cache = CACHE.read().await;
+    if let Some(database) = cache.get(&db_id) {
+        Ok(database.keys().cloned().collect::<Vec<_>>())
+    } else {
+        Err(anyhow::Error::msg("Database doesn't exist"))
+    }
 }
