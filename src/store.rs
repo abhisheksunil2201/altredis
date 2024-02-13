@@ -26,6 +26,8 @@ pub struct Config {
     pub port: u16,
     pub masterhost: Option<String>,
     pub masterport: Option<u16>,
+    pub master_replid: String,
+    pub master_repl_offset: u64,
 }
 
 impl Config {
@@ -36,6 +38,8 @@ impl Config {
             port: 6379,
             masterhost: None,
             masterport: None,
+            master_replid: format!("8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb"),
+            master_repl_offset: 0,
         }
     }
 }

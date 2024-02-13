@@ -1,23 +1,17 @@
 mod parse;
 mod rdb;
+mod replica;
 mod store;
-use crate::rdb::DataType;
-use bytes::buf::Writer;
-use bytes::BufMut;
+use crate::{parse::parse_command, rdb::DataType, replica::Replica};
+use bytes::{buf::Writer, BufMut};
 use once_cell::sync::Lazy;
-use std::env::args;
-use std::io::Write;
-use std::sync::Arc;
-use std::{path::Path, result::Result::Ok};
+use std::{env::args, io::Write, path::Path, result::Result::Ok, sync::Arc};
 use store::{db_get, db_set, Config};
 use thiserror::Error;
-use tokio::sync::RwLock;
-
-use crate::parse::parse_command;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
-    task,
+    sync::RwLock,
 };
 pub enum Command {
     Ping,
@@ -167,14 +161,21 @@ async fn handle_connection(mut stream: TcpStream) {
                 Command::Info(arg) => match arg.to_lowercase().as_str() {
                     "replication" => {
                         let masterhost = CONFIG.read().await.masterhost.clone();
-                        let string = match masterhost {
+                        let master_replid = CONFIG.read().await.master_replid.clone();
+                        let master_repl_offset = CONFIG.read().await.master_repl_offset.clone();
+                        let role = match masterhost {
                             Some(_) => format!("role:slave"),
                             None => format!("role:master"),
                         };
-                        let mut response = String::new();
-                        response.push_str(
-                            format!("${}{}{}{}", string.len(), CRLF, string, CRLF).as_str(),
+                        let master_repl_id_string = format!("master_replid:{}", master_replid);
+                        let master_repl_offset_string =
+                            format!("master_repl_offset:{}", master_repl_offset);
+                        let response_str = format!(
+                            "{}\n{}\n{}",
+                            role, master_repl_id_string, master_repl_offset_string
                         );
+                        let response =
+                            format!("${}{}{}{}", response_str.len(), CRLF, response_str, CRLF);
                         let _ = stream.write_all(response.as_bytes()).await;
                     }
                     _ => {
@@ -243,23 +244,52 @@ async fn handle_arguments() -> Result<(), anyhow::Error> {
 
     Ok(())
 }
+pub async fn handshake(mut stream: TcpStream, port: u16) -> Result<(), std::io::Error> {
+    let _ = stream.write_all("*1\r\n$4\r\nping\r\n".as_bytes()).await?;
+    let _ = stream
+        .write_all(
+            format!(
+                "*3\r\n$8\r\nREPLCONF\r\n$14\r\nlistening-port\r\n$4\r\n{}\r\n",
+                port
+            )
+            .as_bytes(),
+        )
+        .await?;
+    let _ = stream
+        .write_all("*3\r\n$8\r\nREPLCONF\r\n$4\r\ncapa\r\n$6\r\npsync2\r\n".as_bytes())
+        .await?;
+    Ok(())
+}
+async fn replica_connect() -> anyhow::Result<()> {
+    if let (Some(masterhost), Some(masterport), port) = (
+        CONFIG.read().await.masterhost.clone(),
+        CONFIG.read().await.masterport.clone(),
+        CONFIG.read().await.port.clone(),
+    ) {
+        let replica = Replica::new(0, masterhost, masterport);
+        let addr = format!("{}:{}", replica.address, replica.port);
+        let stream = TcpStream::connect(addr).await?;
+        let _ = handshake(stream, port).await;
+    }
+    Ok(())
+}
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
     println!("Logs from altredis will appear here!");
-    // let config = store::Config::new();
     let _ = handle_arguments().await?;
     let _ = load_db().await?;
-    // let config = Arc::new(config);
-    let port = CONFIG.read().await.port;
+    let config = CONFIG.read().await;
+    let port = config.port;
     let addr = format!("127.0.0.1:{}", port);
     let listener = TcpListener::bind(addr).await;
+    replica_connect().await?;
 
     match listener {
         Ok(listener) => loop {
             if let Ok((stream, socket_addr)) = listener.accept().await {
                 println!("Accepted new connection from {}", socket_addr);
-                task::spawn(async move {
+                tokio::spawn(async move {
                     // let _client = Client::new(stream);
                     handle_connection(stream).await;
                 });

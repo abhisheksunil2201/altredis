@@ -23,7 +23,7 @@ fn parse_array(data: &str) -> Result<(Data, &str), &str> {
         Err("Can't parse array.")
     }
 }
-fn parse_string(data: &str) -> Result<(Data, &str), &str> {
+pub fn parse_string(data: &str) -> Result<(Data, &str), &str> {
     let data = data.split_once(CRLF);
     if let Some((len, rest)) = data {
         let len = len[1..]
