@@ -11,7 +11,7 @@ use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, BufReader};
 
 #[allow(unused)]
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub enum DataType {
     String(String),
     List,
