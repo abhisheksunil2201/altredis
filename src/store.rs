@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::sync::RwLock;
 
+#[derive(Debug, Clone)]
 pub struct Value {
     pub value: DataType,
     pub expiry: Option<SystemTime>,

@@ -1,7 +1,8 @@
 use std::time::{Duration, SystemTime};
 static CRLF: &str = "\r\n";
-use crate::rdb::DataType;
-use crate::{store, Command};
+use crate::Command;
+
+#[derive(Debug, PartialOrd, PartialEq, Clone)]
 pub enum Data {
     Array(Vec<Data>),
     BulkStringValue(String),
@@ -62,6 +63,16 @@ pub fn parse_command(data: &str) -> Result<Command, &str> {
                     args.push_str(CRLF);
                     Ok(Command::Echo(args.clone()))
                 }
+                "REPLCONF" => Ok(Command::ReplConf),
+                "PSYNC" => {
+                    let mut args = Vec::new();
+                    for arg in cmd_vec.iter().skip(1) {
+                        if let Data::BulkStringValue(arg) = arg {
+                            args.push(arg.clone());
+                        }
+                    }
+                    Ok(Command::Psync(args))
+                }
                 "GET" => {
                     let key = cmd_vec.get(1);
                     let mut key_str = String::new();
@@ -88,13 +99,10 @@ pub fn parse_command(data: &str) -> Result<Command, &str> {
                                     match expiry.parse::<u64>() {
                                         Ok(duration) => Ok(Command::Set(
                                             key_str.clone(),
-                                            store::Value {
-                                                value: DataType::String(value_str.clone()),
-                                                expiry: Some(
-                                                    SystemTime::now()
-                                                        + Duration::from_millis(duration),
-                                                ),
-                                            },
+                                            value_str.clone(),
+                                            Some(
+                                                SystemTime::now() + Duration::from_millis(duration),
+                                            ),
                                         )),
                                         Err(_) => return Err("Invalid expiry duration"),
                                     }
@@ -105,13 +113,7 @@ pub fn parse_command(data: &str) -> Result<Command, &str> {
                             _ => Err("Invalid argument."),
                         }
                     } else {
-                        Ok(Command::Set(
-                            key_str.clone(),
-                            store::Value {
-                                value: DataType::String(value_str.clone()),
-                                expiry: None,
-                            },
-                        ))
+                        Ok(Command::Set(key_str.clone(), value_str.clone(), None))
                     }
                 }
                 "CONFIG" => {
