@@ -5,7 +5,6 @@ mod replica;
 mod store;
 mod utils;
 use crate::{connection::handle_connection, replica::Replica, utils::get_array};
-use anyhow::Context;
 use bytes::BufMut;
 use once_cell::sync::Lazy;
 use std::{env::args, path::Path, result::Result::Ok, sync::Arc, time::SystemTime};
@@ -13,8 +12,8 @@ use store::Config;
 use thiserror::Error;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    net::{tcp::OwnedWriteHalf, TcpListener, TcpStream},
-    sync::{mpsc, Mutex, RwLock},
+    net::{TcpListener, TcpStream},
+    sync::RwLock,
 };
 pub enum Command {
     Ping,
@@ -100,6 +99,7 @@ async fn handle_arguments() -> Result<(), anyhow::Error> {
                 if let (Some(masterhost), Some(Ok(masterport))) = (masterhost, masterport) {
                     config.masterhost = Some(masterhost);
                     config.masterport = Some(masterport);
+                    config.mode = store::ServerMode::Replica;
                 }
             }
             _ => {}
@@ -158,7 +158,8 @@ pub async fn handshake(addr: String, port: u16) -> anyhow::Result<()> {
 
     Ok(())
 }
-async fn replica_connect() -> anyhow::Result<()> {
+
+async fn replica_connect_to_master() -> anyhow::Result<()> {
     if let (Some(masterhost), Some(masterport), port) = (
         CONFIG.read().await.masterhost.clone(),
         CONFIG.read().await.masterport.clone(),
@@ -180,32 +181,14 @@ async fn main() {
     let port = config.port;
     let addr = format!("127.0.0.1:{}", port);
     let listener = TcpListener::bind(addr).await.unwrap();
-    let _ = replica_connect().await;
-    let replicas: Arc<Mutex<Vec<Arc<Mutex<OwnedWriteHalf>>>>> = Arc::new(Mutex::new(vec![]));
-    let (tx, mut rx) = mpsc::channel::<String>(10);
-    let replicas_clone = Arc::clone(&replicas);
-    tokio::spawn(async move {
-        while let Some(resp) = rx.recv().await {
-            for replica in replicas.lock().await.iter() {
-                println!("Sending to replica");
-                replica
-                    .lock()
-                    .await
-                    .write_all(resp.as_bytes())
-                    .await
-                    .context("failed to propagate")
-                    .unwrap();
-            }
-        }
-    });
+    if config.mode == store::ServerMode::Replica {
+        let _ = replica_connect_to_master().await;
+    }
 
     while let Ok((stream, socket_addr)) = listener.accept().await {
         println!("Accepted new connection from {}", socket_addr);
-        let replicas_clone = Arc::clone(&replicas_clone);
-        let tx = tx.clone();
-        let stream = stream.into_split();
         tokio::spawn(async move {
-            handle_connection(stream, replicas_clone, tx).await;
+            let _ = handle_connection(stream).await;
         });
     }
 }

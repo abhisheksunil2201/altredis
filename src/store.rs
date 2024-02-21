@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::SystemTime;
-use tokio::sync::RwLock;
+use tokio::sync::{mpsc::UnboundedSender, Mutex, RwLock};
 
 #[derive(Debug, Clone)]
 pub struct Value {
@@ -21,6 +21,12 @@ static CACHE: Lazy<Arc<RwLock<HashMap<usize, Database>>>> = Lazy::new(|| {
 });
 type Database = HashMap<String, Value>;
 
+#[derive(PartialEq)]
+pub enum ServerMode {
+    Master,
+    Replica,
+}
+
 pub struct Config {
     pub dir: Option<String>,
     pub dbfilename: Option<String>,
@@ -29,6 +35,8 @@ pub struct Config {
     pub masterport: Option<u16>,
     pub master_replid: String,
     pub master_repl_offset: u64,
+    pub replicas: Mutex<Vec<UnboundedSender<String>>>,
+    pub mode: ServerMode,
 }
 
 impl Config {
@@ -41,6 +49,8 @@ impl Config {
             masterport: None,
             master_replid: format!("8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb"),
             master_repl_offset: 0,
+            replicas: Mutex::new(Vec::new()),
+            mode: ServerMode::Master,
         }
     }
 }
