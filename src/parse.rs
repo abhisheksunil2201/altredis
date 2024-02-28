@@ -1,4 +1,7 @@
-use std::time::{Duration, SystemTime};
+use std::{
+    str,
+    time::{Duration, SystemTime},
+};
 static CRLF: &str = "\r\n";
 use crate::Command;
 
@@ -8,7 +11,7 @@ pub enum Data {
     BulkStringValue(String),
 }
 
-fn parse_array(data: &str) -> Result<(Data, &str), &str> {
+pub fn parse_array(data: &str) -> Result<(Data, &str), &str> {
     if let Some((num_elements, mut rest)) = data.split_once(CRLF) {
         let num_elements = num_elements[1..]
             .parse::<usize>()
@@ -39,14 +42,14 @@ pub fn parse_string(data: &str) -> Result<(Data, &str), &str> {
         Err("Invalid string format.")
     }
 }
-fn parse_val(data: &str) -> Result<(Data, &str), &str> {
+pub fn parse_val(data: &str) -> Result<(Data, &str), &str> {
     match data.chars().next() {
         Some('*') => parse_array(data),
         Some('$') => parse_string(data),
         _ => Err("Unknown format"),
     }
 }
-pub fn parse_command(data: &str) -> Result<Command, &str> {
+pub fn parse_command(data: &str) -> anyhow::Result<Command, &str> {
     let (data, _) = parse_val(data)?;
     if let Data::Array(cmd_vec) = data {
         if let Data::BulkStringValue(cmd) = cmd_vec.first().ok_or("Invalid command format.")? {
@@ -75,6 +78,7 @@ pub fn parse_command(data: &str) -> Result<Command, &str> {
                 }
                 "GET" => {
                     let key = cmd_vec.get(1);
+                    println!("Key is: {:?}", key);
                     let mut key_str = String::new();
                     if let Some(Data::BulkStringValue(key)) = key {
                         key_str.push_str(key);
@@ -158,3 +162,24 @@ pub fn parse_command(data: &str) -> Result<Command, &str> {
         Err("Invalid command.")
     }
 }
+
+pub fn parse_buf(buf: &[u8]) -> anyhow::Result<Vec<&str>> {
+    let s = str::from_utf8(buf)?;
+    let parts = s.split("*").collect::<Vec<_>>();
+    Ok(parts)
+}
+
+// pub fn command_string_from_vector(cmd: &Vec<&str>) -> String {
+//     let mut command = String::new();
+//     command.push('*');
+//     command.push(char::from(cmd.len() as u8));
+//     command.push_str("\r\n");
+//     for part in cmd {
+//         command.push('$');
+//         command.push(char::from(part.len() as u8));
+//         command.push_str("\r\n");
+//         command.push_str(part);
+//         command.push_str("\r\n");
+//     }
+//     command
+// }

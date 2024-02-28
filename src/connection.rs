@@ -18,23 +18,28 @@ pub async fn handle_connection(mut stream: TcpStream) -> anyhow::Result<()> {
             n = stream.read(&mut buf[..]) => {
                 let n = n.unwrap_or(0);
                 if n == 0 {
-                    continue;
+                    if let Ok(addr) = stream.peer_addr() {
+                        eprintln!("end of connection with {}", addr);
+                    } else {
+                        eprintln!("end of connection");
+                    }
+                    return Ok(());
                 }
-                let command = parse_command(str::from_utf8(&buf[..n])?).unwrap();
+                let command = parse_command(str::from_utf8(&buf[..n])?);
                 match command {
-                        Command::Ping => {
+                        Ok(Command::Ping) => {
                             let _ = stream.write_all(b"+PONG\r\n").await;
                         }
-                        Command::Echo(s) => {
+                        Ok(Command::Echo(s)) => {
                             let _ = stream.write_all(s.as_bytes()).await;
                         }
-                        Command::ReplConf => {
+                        Ok(Command::ReplConf) => {
                             let config = CONFIG.read().await;
                             config.replicas.lock().await.push(tx.clone());
                             stream.write_all(b"+OK\r\n").await?;
                             stream.flush().await?;
                         }
-                        Command::Psync(args) => {
+                        Ok(Command::Psync(args)) => {
                             let _replication_id = args.get(0);
                             let _offset = args.get(1);
                             let master_repl_id = CONFIG.read().await.master_replid.clone();
@@ -56,32 +61,32 @@ pub async fn handle_connection(mut stream: TcpStream) -> anyhow::Result<()> {
                             let _ = stream.write_all(&bytes).await;
                             stream.flush().await.unwrap();
                         }
-                        Command::Get(key) => {
+                        Ok(Command::Get(key)) => {
                             let value = db_get(selected_db, &key).await;
+                            println!("Received GET command {:?} {:?}", key, value);
                             match value {
                                 Ok(Some(DataType::String(value))) => {
                                     let mut response_buff = Vec::with_capacity(256).writer();
                                     let _ = get_bulk_string(&mut response_buff, value.as_bytes());
                                     let _ = stream.write_all(response_buff.get_ref()).await;
                                 }
-                                Ok(None) => {
+                                _ => {
                                     let _ = stream.write_all(b"$-1\r\n").await;
                                 }
-                                Err(e) => {
-                                    let _ = stream.write_all(format!("-{}\r\n", e).as_bytes()).await;
-                                }
-                                _ => {
-                                    let _ = stream.write_all(b"-Invalid data type\r\n").await;
-                                }
                             }
+                            stream.flush().await?;
                         }
-                        Command::Set(key, value_str, expiry) => {
+                        Ok(Command::Set(key, value_str, expiry)) => {
                             let value = store::Value {
                                 value: DataType::String(value_str),
                                 expiry: expiry,
                             };
                             let _ = db_set(selected_db, key, value).await;
-                            let _ = stream.write_all(b"+OK\r\n").await;
+                            let mode = CONFIG.read().await.mode;
+                            if mode == store::ServerMode::Master {
+                                let _ = stream.write_all(b"+OK\r\n").await;
+                            }
+
                             {
                                 let replica_data = str::from_utf8(&buf[..n])?.to_string();
                                 eprintln!("Received: {}", &replica_data);
@@ -89,8 +94,9 @@ pub async fn handle_connection(mut stream: TcpStream) -> anyhow::Result<()> {
                                     let _ = sender.send(replica_data.clone())?;
                                 }
                             }
+                            stream.flush().await?;
                         }
-                        Command::GetConfig(key) => match key.to_lowercase().as_str() {
+                        Ok(Command::GetConfig(key)) => match key.to_lowercase().as_str() {
                             "dir" => {
                                 let mut response = String::new();
                                 let dir = CONFIG.read().await.dir.clone();
@@ -134,7 +140,7 @@ pub async fn handle_connection(mut stream: TcpStream) -> anyhow::Result<()> {
                                 let _ = stream.write_all(b"$-1\r\n").await;
                             }
                         },
-                        Command::Keys(pattern) => {
+                        Ok(Command::Keys(pattern)) => {
                             if pattern == "*" {
                                 let keys = store::db_list_keys(selected_db).await;
                                 match keys {
@@ -154,7 +160,7 @@ pub async fn handle_connection(mut stream: TcpStream) -> anyhow::Result<()> {
                                 }
                             }
                         }
-                        Command::Info(arg) => match arg.to_lowercase().as_str() {
+                        Ok(Command::Info(arg)) => match arg.to_lowercase().as_str() {
                             "replication" => {
                                 let masterhost = CONFIG.read().await.masterhost.clone();
                                 let master_replid = CONFIG.read().await.master_replid.clone();
@@ -178,6 +184,9 @@ pub async fn handle_connection(mut stream: TcpStream) -> anyhow::Result<()> {
                                 let _ = stream.write_all(b"$-1\r\n").await;
                             }
                         },
+                        _ => {
+                            let _ = stream.write_all(b"$-1\r\n").await;
+                        }
                     }
             },
             cmd = rx.recv() => {
@@ -189,3 +198,49 @@ pub async fn handle_connection(mut stream: TcpStream) -> anyhow::Result<()> {
         }
     }
 }
+
+// pub async fn handle_replica_connection(mut stream: TcpStream) -> anyhow::Result<()> {
+//     let mut buf = [0u8; 256];
+//     let selected_db = 0;
+//     loop {
+//         tokio::select! {
+//         n = stream.read(&mut buf[..]) => {
+//             let n = n.unwrap_or(0);
+//             println!("Received {} bytes", n);
+//             if n == 0 {
+//                 eprintln!("end of master connection");
+//                 return Ok(());
+//             }
+//             eprintln!("read {n} bytes on master connection");
+//             dbg!(String::from_utf8_lossy(&buf[..n]));
+//             let command = parse_command(str::from_utf8(&buf[..n])?).unwrap_or(Command::Unknown);
+//             println!("Received command {:?}", &command);
+//             match command  {
+//                     Command::Set(key, value, expiry) => {
+//                         let value = store::Value {
+//                             value: DataType::String(value),
+//                             expiry: expiry,
+//                         };
+//                         let _ = db_set(selected_db, key, value).await;
+//                     }
+//                     Command::Get(key) => {
+//                         println!("Received GET command {:?}", key);
+//                         let value = db_get(selected_db, &key).await;
+//                         match value {
+//                             Ok(Some(DataType::String(value))) => {
+//                                 let mut response_buff = Vec::with_capacity(256).writer();
+//                                 let _ = get_bulk_string(&mut response_buff, value.as_bytes());
+//                                 let _ = stream.write_all(response_buff.get_ref()).await;
+//                             }
+//                             _ => {
+//                                 let _ = stream.write_all(b"$-1\r\n").await;
+//                             }
+//                         }
+//                         stream.flush().await?;
+//                     }
+//                     _ => {eprintln!("unexpected command on master connection");}
+//                 }
+//             }
+//         }
+//     }
+// }

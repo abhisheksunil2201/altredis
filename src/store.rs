@@ -21,7 +21,7 @@ static CACHE: Lazy<Arc<RwLock<HashMap<usize, Database>>>> = Lazy::new(|| {
 });
 type Database = HashMap<String, Value>;
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Debug, Clone, Copy)]
 pub enum ServerMode {
     Master,
     Replica,
@@ -88,6 +88,7 @@ pub async fn db_load(db_file: impl AsRef<Path>) -> Result<(), anyhow::Error> {
 }
 
 pub async fn db_get(db_id: usize, key: &String) -> Result<Option<DataType>, anyhow::Error> {
+    println!("Getting key: {}", key);
     let (result, should_remove) = {
         let cache = CACHE.read().await;
         if let Some(database) = cache.get(&db_id) {
