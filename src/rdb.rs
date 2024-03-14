@@ -10,25 +10,10 @@ use thiserror::Error;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, BufReader};
 
-#[allow(unused)]
-#[derive(Clone, Debug)]
-pub enum DataType {
-    String(String),
-    List,
-    Set,
-    SortedSet,
-    Hash,
-    ZipMap,
-    ZipList,
-    IntSet,
-    SortedSetZipList,
-    HashMapZipList,
-    ListQuickList,
-}
 pub struct RdbData {
     pub rdb_version: u16,
     pub metadata: HashMap<String, String>,
-    pub databases: HashMap<usize, HashMap<String, DataType>>,
+    pub databases: HashMap<usize, HashMap<String, String>>,
     pub expirations: HashMap<usize, HashMap<String, SystemTime>>,
 }
 
@@ -75,7 +60,7 @@ impl RdbReader {
             let ver_str = std::str::from_utf8(&buff)?;
             u16::from_str(ver_str)?
         };
-        let mut databases: HashMap<usize, HashMap<String, DataType>> = HashMap::new();
+        let mut databases: HashMap<usize, HashMap<String, String>> = HashMap::new();
         let mut metadata = HashMap::new();
         let mut expirations: HashMap<usize, HashMap<String, SystemTime>> = HashMap::new();
         let mut current_database: Option<usize> = None;
@@ -123,7 +108,9 @@ impl RdbReader {
                         return Err(RdbReadError::AttemptReadKeyWithoutDatabaseSelected);
                     };
 
-                    let (key, value) = reader.read_key_value(Some(opcode)).await?;
+                    let (key, value) = match reader.read_key_value(Some(opcode)).await? {
+                        (key, value) => (key, value),
+                    };
 
                     if let Some(expiration) = next_expiration {
                         expirations
@@ -164,7 +151,7 @@ trait RdbBufReader {
     async fn read_key_value(
         &mut self,
         known_type: Option<u8>,
-    ) -> Result<(String, DataType), RdbReadError>;
+    ) -> Result<(String, String), RdbReadError>;
 
     async fn read_length_encoding(
         reader: &mut BufReader<File>,
@@ -206,9 +193,9 @@ trait RdbBufReader {
     async fn read_value_type(
         reader: &mut BufReader<File>,
         value_type: u8,
-    ) -> Result<DataType, RdbReadError> {
+    ) -> Result<String, RdbReadError> {
         let value = match value_type {
-            0 => DataType::String(reader.read_string_encoded().await?),
+            0 => reader.read_string_encoded().await?,
             _ => todo!("DataType isn't handled yet!"),
         };
 
@@ -258,7 +245,7 @@ impl RdbBufReader for BufReader<File> {
     async fn read_key_value(
         &mut self,
         known_type: Option<u8>,
-    ) -> Result<(String, DataType), RdbReadError> {
+    ) -> Result<(String, String), RdbReadError> {
         let value_type = if let Some(known_type) = known_type {
             known_type
         } else {

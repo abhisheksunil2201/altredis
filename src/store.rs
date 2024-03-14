@@ -1,14 +1,18 @@
-use crate::rdb::{DataType, RdbReader};
+use crate::rdb::RdbReader;
+use anyhow::Result;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::SystemTime;
-use tokio::sync::{mpsc::UnboundedSender, Mutex, RwLock};
+use tokio::{
+    net::tcp::OwnedWriteHalf,
+    sync::{Mutex, RwLock},
+};
 
 #[derive(Debug, Clone)]
 pub struct Value {
-    pub value: DataType,
+    pub value: String,
     pub expiry: Option<SystemTime>,
 }
 
@@ -35,7 +39,7 @@ pub struct Config {
     pub masterport: Option<u16>,
     pub master_replid: String,
     pub master_repl_offset: u64,
-    pub replicas: Mutex<Vec<UnboundedSender<String>>>,
+    pub replicas: Mutex<Vec<Arc<Mutex<OwnedWriteHalf>>>>,
     pub mode: ServerMode,
 }
 
@@ -87,12 +91,13 @@ pub async fn db_load(db_file: impl AsRef<Path>) -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-pub async fn db_get(db_id: usize, key: &String) -> Result<Option<DataType>, anyhow::Error> {
+pub async fn db_get(db_id: usize, key: &String) -> Result<Option<String>, anyhow::Error> {
     println!("Getting key: {}", key);
     let (result, should_remove) = {
         let cache = CACHE.read().await;
         if let Some(database) = cache.get(&db_id) {
             let mut is_valid = true;
+            println!("Database: {:?}", database);
             if let Some(entry) = database.get(key) {
                 if let Some(expiration) = entry.expiry.as_ref() {
                     if *expiration < SystemTime::now() {
@@ -123,6 +128,7 @@ pub async fn db_get(db_id: usize, key: &String) -> Result<Option<DataType>, anyh
 }
 
 pub async fn db_set(db_id: usize, key: String, value: Value) -> Result<(), anyhow::Error> {
+    println!("Setting key: {}", key);
     let mut cache = CACHE.write().await;
     if let Some(database) = cache.get_mut(&db_id) {
         let entry = Value {

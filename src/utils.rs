@@ -19,3 +19,21 @@ pub fn get_array(buffer: &mut Writer<Vec<u8>>, array: Vec<Vec<u8>>) -> tokio::io
     }
     Ok(())
 }
+pub fn build_resp_string(text: &str) -> Vec<u8> {
+    if text.is_empty() {
+        return "$-1\r\n".as_bytes().to_vec();
+    }
+    let string = format!("${}\r\n{}\r\n", text.len(), text);
+    string.as_bytes().to_vec()
+}
+pub fn build_resp_array(command: &str) -> Vec<u8> {
+    let split = command.split(' ').collect::<Vec<_>>();
+    let resp_strings = split
+        .iter()
+        .map(|text| build_resp_string(text))
+        .collect::<Vec<_>>();
+    let res = resp_strings.concat();
+    let mut string = format!("*{}\r\n", resp_strings.len()).as_bytes().to_vec();
+    string.extend_from_slice(&res);
+    string
+}

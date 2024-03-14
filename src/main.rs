@@ -5,34 +5,60 @@ mod replica;
 mod store;
 mod utils;
 use crate::{
-    connection::handle_connection,
-    parse::{parse_buf, parse_command},
-    rdb::DataType,
-    replica::Replica,
-    store::db_set,
-    utils::get_array,
+    connection::handle_connection, parse::parse_command, replica::Replica, utils::get_array,
 };
 use bytes::BufMut;
 use once_cell::sync::Lazy;
+use parse::process_buff;
 use std::{env::args, path::Path, result::Result::Ok, str, sync::Arc, time::SystemTime};
 use store::Config;
 use thiserror::Error;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
-    sync::RwLock,
+    sync::{Mutex, RwLock},
 };
 #[derive(Debug, Clone)]
 pub enum Command {
     Ping,
     Echo(String),
-    ReplConf,
+    ReplConf(String),
+    ReplConfAck,
     Psync(Vec<String>),
     Get(String),
     Set(String, String, Option<SystemTime>),
     GetConfig(String),
     Keys(String),
     Info(String),
+}
+
+impl ToString for Command {
+    fn to_string(&self) -> String {
+        match self {
+            Command::Ping => "PING".to_owned(),
+            Command::Echo(s) => format!("ECHO {}", s),
+            Command::Get(s) => format!("GET {}", s),
+            Command::Set(k, v, ex) => {
+                if ex.is_some() {
+                    format!("SET {} {} {:?}", k, v, ex.clone().unwrap())
+                } else {
+                    format!("SET {} {}", k, v)
+                }
+            }
+            Command::Info(s) => {
+                if !s.is_empty() {
+                    format!("INFO {}", s.clone())
+                } else {
+                    "INFO".to_owned()
+                }
+            }
+            Command::ReplConf(_args) => format!("{} {}", "REPLCONF", "listening-port"),
+            Command::Psync(_args) => "PSYNC".to_owned(),
+            Command::ReplConfAck => "REPLCONF getack".to_owned(),
+            Command::GetConfig(s) => format!("CONFIG GET {}", s),
+            Command::Keys(s) => format!("KEYS {}", s),
+        }
+    }
 }
 
 static CRLF: &str = "\r\n";
@@ -103,7 +129,6 @@ pub async fn handshake(addr: String, port: u16) -> anyhow::Result<()> {
     let mut stream = TcpStream::connect(addr).await?;
     let mut buf = Vec::with_capacity(256).writer();
     let mut readbuf = [0u8; 1024];
-    let selected_db = 0;
     println!("Connected to Master");
     let _ = get_array(&mut buf, vec!["PING".as_bytes().to_vec()]);
     let _ = stream.write_all(buf.get_ref()).await?;
@@ -146,40 +171,11 @@ pub async fn handshake(addr: String, port: u16) -> anyhow::Result<()> {
                                                     // let _n = stream.read(&mut readbuf[..]).await?; // <- RESP
     stream.flush().await?;
     buf.get_mut().clear();
-    let _rdbdata = stream.read(&mut readbuf[..]).await?;
-    loop {
-        tokio::select! {
-            n = stream.read(&mut readbuf[..]) => {
-                let n = n.unwrap_or(0);
-                if n == 0 {
-                    eprintln!("end of master connection");
-                    return Ok(());
-                }
-                dbg!(String::from_utf8_lossy(&readbuf[..n]));
-
-                let parts = if let Ok(parts) = parse_buf(&readbuf[..n]) {
-                    parts
-                } else {
-                    continue;
-                };
-                for part in parts {
-                    let command = "*".to_string() + &part;
-                    match parse_command(&command)  {
-                        Ok(Command::Set(key, value, expiry)) => {
-                            let value = store::Value {
-                                value: DataType::String(value),
-                                expiry: expiry,
-                            };
-                            let _ = db_set(selected_db, key, value).await?;
-
-                            stream.flush().await?;
-                        }
-                        _ => {eprintln!("unexpected command on master connection {:?}", command);}
-                    }
-                }
-            }
-        }
-    }
+    stream.read(&mut readbuf[..]).await?;
+    tokio::spawn(async move {
+        let _ = handle_client(stream, false).await;
+    });
+    Ok(())
 }
 
 async fn replica_connect_to_master() -> anyhow::Result<()> {
@@ -193,6 +189,44 @@ async fn replica_connect_to_master() -> anyhow::Result<()> {
         let _ = handshake(addr, port).await;
     }
     Ok(())
+}
+
+async fn handle_client(stream: TcpStream, respond: bool) -> anyhow::Result<()> {
+    let (read, write) = stream.into_split();
+    let read_guarded = Arc::new(Mutex::new(read));
+    let write_guarded = Arc::new(Mutex::new(write));
+    loop {
+        let mut buff = [0; 512];
+        let read_clone = Arc::clone(&read_guarded);
+        let bytes_read = {
+            let mut stream_lock = read_clone.lock().await;
+            stream_lock.read(&mut buff).await?
+        };
+        if bytes_read == 0 {
+            println!("Connection closed");
+            return Ok(());
+        }
+        let commands_vectors = process_buff(&buff[..bytes_read]).await?;
+        for cmd_vec in commands_vectors {
+            let command = parse_command(cmd_vec)?;
+            println!("command is {:?}", command);
+            let responses = {
+                let write_clone = Arc::clone(&write_guarded);
+                handle_connection(write_clone, &command).await
+            };
+
+            if !respond {
+                continue;
+            }
+
+            for response in responses {
+                let write_clone = Arc::clone(&write_guarded);
+                let mut write_lock = write_clone.lock().await;
+                write_lock.write_all(&response).await?;
+                write_lock.flush().await?;
+            }
+        }
+    }
 }
 
 #[tokio::main]
@@ -209,11 +243,11 @@ async fn main() {
             let _ = replica_connect_to_master().await;
         });
     }
-
-    while let Ok((stream, socket_addr)) = listener.accept().await {
+    loop {
+        let (stream, socket_addr) = listener.accept().await.unwrap();
         println!("Accepted new connection from {}", socket_addr);
         tokio::spawn(async move {
-            let _ = handle_connection(stream).await;
+            let _ = handle_client(stream, true).await;
         });
     }
 }
